@@ -1,0 +1,8 @@
+{
+  "projects": {
+    "default": "doodlemagic",
+    "build": "doodlemagic"
+  },
+  "targets": {},
+  "etags": {}
+}
