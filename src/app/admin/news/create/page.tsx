@@ -13,7 +13,7 @@ import { useAuthContext } from "@/providers/firebase-provider";
 import { useAuthRedirect } from "@/hooks/use-auth-redirect";
 import { createBlogPost } from "@/lib/actions";
 import { useToast } from "@/hooks/use-toast";
-import { Loader2, FilePlus2 } from "lucide-react";
+import { Loader2, FilePlus2, X } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { uploadFile } from "@/lib/file-upload";
 
@@ -28,8 +28,8 @@ const blogPostSchema = z.object({
   slug: z.string().min(3).regex(/^[a-z0-9-]+$/),
   content: z.string().min(10),
   excerpt: z.string().min(10).max(160),
-  featuredImage: z.string().url().optional(),
-  videoUrl: z.string().url().optional(), // New field for video URLs
+  featuredImage: z.string().optional(), // Changed from url() to optional()
+  videoUrl: z.string().url().optional(),
   published: z.boolean().default(false),
   metaTitle: z.string().optional(),
   metaDescription: z.string().optional(),
@@ -54,6 +54,9 @@ export default function CreateBlogPostPage() {
   const router = useRouter();
   const [isLoading, setIsLoading] = useState(false);
   const [content, setContent] = useState("");
+  const [featuredImageFile, setFeaturedImageFile] = useState<File | null>(null);
+  const [featuredImagePreview, setFeaturedImagePreview] = useState<string | null>(null);
+  const [uploadingFeaturedImage, setUploadingFeaturedImage] = useState(false);
 
   useEffect(() => {
     const verifyAdmin = async () => {
@@ -73,7 +76,7 @@ export default function CreateBlogPostPage() {
         if (!res.ok) throw new Error("Admin check failed");
 
         const { isAdmin } = await res.json();
-        setIsAdmin(isAdmin === true); // Strict boolean check
+        setIsAdmin(isAdmin === true);
 
       } catch (err) {
         console.error("Admin verification failed:", err);
@@ -92,45 +95,98 @@ export default function CreateBlogPostPage() {
       console.warn("[DEBUG] No user is currently logged in.");
     }
   }, [user]);
+  
   const [mediaFiles, setMediaFiles] = useState<NonNullable<BlogPostFormValues["media"]>>([]);
   const [uploadingMedia, setUploadingMedia] = useState(false);
 
-const removeMediaFile = (index: number) => {
-  const updatedFiles = [...mediaFiles];
-  updatedFiles.splice(index, 1);
-  setMediaFiles(updatedFiles);
-  form.setValue("media", updatedFiles);
-};
+  const removeMediaFile = (index: number) => {
+    const updatedFiles = [...mediaFiles];
+    updatedFiles.splice(index, 1);
+    setMediaFiles(updatedFiles);
+    form.setValue("media", updatedFiles);
+  };
 
-const handleMediaUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-  const files = e.target.files;
-  if (!files || files.length === 0) return;
-
-  setUploadingMedia(true);
-
-  try {
-    const uploaded: BlogPostFormValues["media"] = [];
-
-    for (const file of Array.from(files)) {
-      const url = await uploadFile(file, user?.uid || "anon");
-      const type = file.type.startsWith("video") ? "video" : "image";
-      uploaded.push({ type, url, altText: file.name });
+  // Handle featured image upload
+  const handleFeaturedImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+    
+    const file = files[0];
+    
+    // Validate file type
+    if (!file.type.startsWith("image/")) {
+      toast({
+        title: "Invalid File Type",
+        description: "Please upload an image file.",
+        variant: "destructive",
+      });
+      return;
     }
+    
+    setUploadingFeaturedImage(true);
+    setFeaturedImageFile(file);
+    
+    // Create preview
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      setFeaturedImagePreview(e.target?.result as string);
+    };
+    reader.readAsDataURL(file);
+    
+    try {
+      const url = await uploadFile(file, user?.uid || "anon");
+      form.setValue("featuredImage", url);
+      setUploadingFeaturedImage(false);
+    } catch (error) {
+      console.error("Featured image upload error", error);
+      toast({
+        title: "Featured Image Upload Failed",
+        description: "Please try again.",
+        variant: "destructive",
+      });
+      setUploadingFeaturedImage(false);
+      setFeaturedImageFile(null);
+      setFeaturedImagePreview(null);
+    }
+  };
 
-    const allMedia = [...mediaFiles, ...uploaded];
-    setMediaFiles(allMedia);
-    form.setValue("media", allMedia);
-  } catch (error) {
-    console.error("Media upload error", error);
-    toast({
-      title: "Media Upload Failed",
-      description: "Please try again.",
-      variant: "destructive",
-    });
-  } finally {
-    setUploadingMedia(false);
-  }
-};
+  // Remove featured image
+  const removeFeaturedImage = () => {
+    setFeaturedImageFile(null);
+    setFeaturedImagePreview(null);
+    form.setValue("featuredImage", "");
+  };
+
+  const handleMediaUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+
+    setUploadingMedia(true);
+
+    try {
+      const uploaded: BlogPostFormValues["media"] = [];
+
+      for (const file of Array.from(files)) {
+        const url = await uploadFile(file, user?.uid || "anon");
+        const type = file.type.startsWith("video") ? "video" : "image";
+        uploaded.push({ type, url, altText: file.name });
+      }
+
+      const allMedia = [...mediaFiles, ...uploaded];
+      setMediaFiles(allMedia);
+      form.setValue("media", allMedia);
+    } catch (error) {
+      console.error("Media upload error", error);
+      toast({
+        title: "Media Upload Failed",
+        description: "Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setUploadingMedia(false);
+    }
+  };
+  
   const form = useForm<BlogPostFormValues>({
     resolver: zodResolver(blogPostSchema),
     defaultValues: {
@@ -145,12 +201,14 @@ const handleMediaUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
       metaDescription: "",
     },
   });
+  
   useEffect(() => {
     if (content) {
       form.setValue("content", content);
       form.clearErrors("content");
     }
   }, [content]);
+  
   const onSubmit: SubmitHandler<BlogPostFormValues> = async (data) => {
     console.log("[DEBUG] Submit triggered");
 
@@ -223,17 +281,6 @@ const handleMediaUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     }
   };
 
-  // if (!user) {
-  //   return null;
-  // }
-  // if (isAdmin === false) {
-  //   return (
-  //     <div className="text-center mt-20 text-red-500 text-lg">
-  //       ❌ Unauthorized Access
-  //     </div>
-  //   );
-  // }
-
   if (isAdmin === null) {
     return (
       <div className="flex justify-center items-center min-h-screen">
@@ -305,22 +352,45 @@ const handleMediaUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
               )}
             </div>
 
-            <div>
-              <Label htmlFor="featuredImage">Featured Image URL</Label>
+            {/* Featured Image Upload Field */}
+            <div className="mb-4">
+              <Label htmlFor="featuredImageUpload">Upload Media (Images/Videos)</Label>
               <Input
-                id="featuredImage"
-                {...form.register("featuredImage")}
+                id="featuredImageUpload"
+                type="file"
+                accept="image/*"
+                onChange={handleFeaturedImageUpload}
+                disabled={uploadingFeaturedImage}
                 className="mt-1"
-                placeholder="https://example.com/image.jpg"
               />
-              {form.formState.errors.featuredImage && (
-                <p className="text-sm text-destructive mt-1">
-                  {form.formState.errors.featuredImage.message}
-                </p>
+              {uploadingFeaturedImage && (
+                <p className="text-sm text-muted-foreground mt-2">Uploading...</p>
+              )}
+              
+              {/* Featured Image Preview */}
+              {featuredImagePreview && (
+                <div className="mt-4 relative">
+                  <Label>Featured Image Preview</Label>
+                  <div className="border rounded p-2 relative mt-2 max-w-xs">
+                    <img
+                      src={featuredImagePreview}
+                      alt="Featured preview"
+                      className="w-full h-auto rounded"
+                    />
+                    <button
+                      type="button"
+                      onClick={removeFeaturedImage}
+                      className="absolute top-1 right-1 bg-red-500 text-white rounded-full w-6 h-6 flex items-center justify-center text-xs"
+                    >
+                      <X size={14} />
+                    </button>
+                  </div>
+                </div>
               )}
             </div>
+
             {/* File Upload Field */}
-            <div className="mb-4">
+            {/* <div className="mb-4">
               <Label htmlFor="mediaUpload">Upload Media (Images/Videos)</Label>
               <Input
                 id="mediaUpload"
@@ -334,7 +404,7 @@ const handleMediaUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
               {uploadingMedia && (
                 <p className="text-sm text-muted-foreground mt-2">Uploading...</p>
               )}
-            </div>
+            </div> */}
 
             {/* Video URL Field */}
             <div className="mb-4">
